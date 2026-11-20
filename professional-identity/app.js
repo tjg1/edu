@@ -55,20 +55,36 @@ function initStudent(practice=false){role=practice?'practice':'student';show('st
 $('tryDrawing').onclick=()=>initStudent(true);
 $('openTutor').onclick=()=>{history.replaceState(null,'','#tutor');show('tutorSetup');};
 // Credentials are session-only, supplied by the tutor, and never committed or stored.
+class RelayInputError extends Error {}
+function relayErrorText(error){return error instanceof RelayInputError?error.message:'The relay configuration could not be read. Copy the ICE servers array, not an API key.';}
+// Read a data-only subset of JavaScript snippets. Never evaluate pasted code.
+function readRelayInput(raw){
+ if(typeof raw!=='string'||raw.length>20000)throw new RelayInputError('The configuration is too long. Copy only the ICE servers array.');
+ let text=raw.trim().replace(/^```(?:json|javascript|js)?\s*/i,'').replace(/\s*```$/,'').trim();
+ text=text.replace(/^(?:(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*)?new\s+RTCPeerConnection\s*\(/,'').replace(/\)\s*;?\s*$/,'');
+ text=text.replace(/^(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*/,'').replace(/^iceServers\s*:\s*/,'').replace(/;\s*$/,'');
+ let i=0;
+ const bad=()=>{throw new RelayInputError('The configuration format is not recognised. Paste the ICE servers array or the full RTCPeerConnection snippet. Do not paste an API key or a URL to an API.');};
+ function skip(){while(i<text.length){if(/\s/.test(text[i])){i++;continue;}if(text.slice(i,i+2)==='//'){const end=text.indexOf('\n',i+2);i=end<0?text.length:end;continue;}if(text.slice(i,i+2)==='/*'){const end=text.indexOf('*/',i+2);if(end<0)bad();i=end+2;continue;}break;}}
+ function string(){const quote=text[i++];let value='';while(i<text.length){const c=text[i++];if(c===quote)return value;if(c==='\\'){if(i>=text.length)bad();const esc=text[i++];const replacements={'n':'\n','r':'\r','t':'\t','b':'\b','f':'\f','v':'\v','0':'\0'};if(esc==='u'||esc==='x'){const count=esc==='u'?4:2;const hex=text.slice(i,i+count);if(!new RegExp('^[a-f0-9]{'+count+'}$','i').test(hex))bad();value+=String.fromCharCode(parseInt(hex,16));i+=count;}else if(Object.hasOwn(replacements,esc))value+=replacements[esc];else if(esc==='\\'||esc==='"'||esc==="'"||esc==='/')value+=esc;else bad();}else{if(c==='\n'||c==='\r')bad();value+=c;}}bad();}
+ function value(depth=0){if(depth>8)bad();skip();const c=text[i];if(c==='"'||c==="'")return string();if(c==='['){i++;const items=[];skip();while(text[i]!==']'){items.push(value(depth+1));if(items.length>100)bad();skip();if(text[i]===','){i++;skip();}else if(text[i]!==']')bad();}i++;return items;}if(c==='{'){i++;const object=Object.create(null);skip();while(text[i]!=='}'){let key;if(text[i]==='"'||text[i]==="'")key=string();else{const match=/^[A-Za-z_$][\w$]*/.exec(text.slice(i));if(!match)bad();key=match[0];i+=key.length;}if(['__proto__','constructor','prototype'].includes(key)||Object.hasOwn(object,key))bad();skip();if(text[i++]!==':')bad();object[key]=value(depth+1);skip();if(text[i]===','){i++;skip();}else if(text[i]!=='}')bad();}i++;return object;}const literal=/^(true|false|null|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)(?![\w$])/.exec(text.slice(i));if(literal){i+=literal[0].length;return JSON.parse(literal[0]);}bad();}
+ const parsed=value();skip();if(i!==text.length)bad();return parsed;
+}
 function parseRelay(raw){
- const parsed=JSON.parse(raw);const entries=Array.isArray(parsed)?parsed:parsed?.iceServers;
- if(!Array.isArray(entries)||entries.length<1||entries.length>10)throw Error('Paste a TURN iceServers array or an object containing iceServers. Do not paste an account API key.');
+ const parsed=readRelayInput(raw);const entries=Array.isArray(parsed)?parsed:parsed?.iceServers;
+ if(!Array.isArray(entries)||entries.length<1||entries.length>10)throw new RelayInputError('Paste a TURN iceServers array or an object containing iceServers. Do not paste an account API key.');
  const result=[];
  for(const item of entries){
-  if(!item||typeof item!=='object')throw Error('Each relay entry must be an ICE server object.');
-  const urls=Array.isArray(item.urls)?item.urls:[item.urls];
-  if(!urls.length||urls.length>8||!urls.every(u=>typeof u==='string'&&u.length<=300&&/^(stun|stuns|turn|turns):[a-z0-9.-]+(?::[0-9]{1,5})?(?:\?transport=(udp|tcp))?$/i.test(u)))throw Error('Check the relay URLs. Use TURN or TURNS addresses supplied by your provider.');
+  if(!item||typeof item!=='object')throw new RelayInputError('Each relay entry must be an ICE server object.');
+  const address=item.urls??item.url;const urls=Array.isArray(address)?address:[address];
+  if(!urls.length||urls.length>8||!urls.every(u=>typeof u==='string'&&u.length<=300&&/^(stun|stuns|turn|turns):[a-z0-9.-]+(?::[0-9]{1,5})?(?:\?transport=(udp|tcp))?$/i.test(u)))throw new RelayInputError('Check the relay URLs. Use the provider’s TURN or TURNS server addresses, not its HTTPS API address.');
   const relays=urls.filter(u=>/^turns?:/i.test(u));if(!relays.length)continue;
-  if(typeof item.username!=='string'||!item.username||item.username.length>512||typeof item.credential!=='string'||!item.credential||item.credential.length>1024)throw Error('Each TURN entry needs a username and temporary credential. Do not use an account API key.');
-  result.push({urls:relays,username:item.username,credential:item.credential});
+  const credential=item.credential??item.password;
+  if(typeof item.username!=='string'||!item.username||item.username.length>512||typeof credential!=='string'||!credential||credential.length>1024)throw new RelayInputError('Each TURN entry needs a username and password (credential). Copy Show ICE Servers Array rather than Show API Key.');
+  result.push({urls:relays,username:item.username,credential});
  }
- if(!result.length)throw Error('No TURN server found. STUN alone cannot relay submissions.');
- if(JSON.stringify(result).length>6000)throw Error('Relay settings are too long. Use a smaller set of session credentials.');
+ if(!result.length)throw new RelayInputError('No TURN server found. Copy the full ICE servers array including TURN entries; STUN alone cannot relay submissions.');
+ if(JSON.stringify(result).length>6000)throw new RelayInputError('Relay settings are too long. Use a smaller set of session credentials.');
  return result;
 }
 function chosenRelay(){const mode=$('connectionMode').value;if(mode!=='relay')return {servers:[],only:false};return {servers:parseRelay($('relayConfig').value),only:true};}
@@ -76,7 +92,7 @@ function makePeer(id){return new Peer(id,{debug:0,secure:true,config:{iceServers
 $('connectionMode').onchange=()=>{$('relaySettings').hidden=$('connectionMode').value!=='relay';$('relayTestStatus').textContent='';};
 function stopProbe(){if(relayProbe){relayProbe.close();relayProbe=null;}}
 $('testRelay').onclick=async()=>{
- stopProbe();$('relayTestStatus').textContent='';let selected;try{selected=chosenRelay();if(!selected.only)throw Error('Select TURN relay mode to test a relay.');}catch{$('relayTestStatus').textContent='Enter valid TURN URLs, username and temporary credentials first.';return;}
+ stopProbe();$('relayTestStatus').textContent='';let selected;try{selected=chosenRelay();if(!selected.only)throw new RelayInputError('Select TURN relay mode to test a relay.');}catch(error){$('relayTestStatus').textContent=relayErrorText(error);return;}
  const button=$('testRelay');button.disabled=true;const statusEl=$('relayTestStatus');statusEl.textContent='Checking whether this device can obtain a relay connection…';
  let timer,finished=false,pc;
  const finish=message=>{if(finished)return;finished=true;clearTimeout(timer);pc?.close();if(relayProbe===pc)relayProbe=null;button.disabled=false;statusEl.textContent=message;};
@@ -97,7 +113,7 @@ function receiveConnection(conn){if(closed||!checkTime()){conn.close();return;}l
 conn.on('data',m=>{if(!checkTime())return;if(!authenticated){if(!m||m.type!=='hello'||m.token!==session.token||typeof m.id!=='string'||!/^[a-f0-9]{32}$/.test(m.id)){conn.close();return;}identity=m.id;let p=participants.get(identity);if(!p){if(participants.size>=12){safeSend(conn,{type:'rejected',reason:'This session already has 12 participants.'});setTimeout(()=>conn.close(),200);return;}p={name:namePool[participants.size],conn};participants.set(identity,p);}else{p.conn?.close();p.conn=conn;}authenticated=true;clearTimeout(authTimer);showRoute(conn);safeSend(conn,{type:'welcome',name:p.name,expires:deadline,paused});updateGalleryCount();return;}
 if(validWork(m)){if(paused){safeSend(conn,{type:'paused',value:true});return;}const p=participants.get(identity);const prior=gallery.get(identity);if(prior&&m.revision<prior.revision)return;gallery.set(identity,{name:p.name,image:m.image,legend:m.legend.map(x=>({text:x.text,colour:x.colour,texture:x.texture})),explanation:m.explanation,revision:m.revision});renderGallery();if(zoomId===identity&&$('zoom').open)openZoom(identity);safeSend(conn,{type:'received',revision:m.revision});}});
 conn.on('close',()=>{clearTimeout(authTimer);if(identity&&participants.get(identity)?.conn===conn){participants.get(identity).conn=null;updateGalleryCount();}});conn.on('error',()=>{clearTimeout(authTimer);});}
-$('startSession').onclick=()=>{if(peer||closed)return;try{const selected=chosenRelay();turnServers=selected.servers;relayOnly=selected.only;}catch{$('setupStatus').textContent='Enter valid TURN URLs, username and temporary credentials, or select direct mode. Never paste an account API key.';return;}stopProbe();$('startSession').disabled=true;$('setupStatus').textContent='Opening a temporary room…';session={id:'identity-'+random(),token:random()};peer=makePeer(session.id);const timer=setTimeout(()=>{$('setupStatus').textContent='The connection service is not responding. Check the network and try again.';peer?.destroy();peer=null;$('startSession').disabled=false;},45000);
+$('startSession').onclick=()=>{if(peer||closed)return;try{const selected=chosenRelay();turnServers=selected.servers;relayOnly=selected.only;}catch(error){$('setupStatus').textContent=relayErrorText(error);return;}stopProbe();$('startSession').disabled=true;$('setupStatus').textContent='Opening a temporary room…';session={id:'identity-'+random(),token:random()};peer=makePeer(session.id);const timer=setTimeout(()=>{$('setupStatus').textContent='The connection service is not responding. Check the network and try again.';peer?.destroy();peer=null;$('startSession').disabled=false;},45000);
 peer.on('open',()=>{clearTimeout(timer);$('relayConfig').value='';role='tutor';deadline=Date.now()+duration;session.expires=deadline;const link=new URL(location.href);const params=new URLSearchParams({room:session.id,key:session.token,until:String(deadline)});if(relayOnly)params.set('ice',JSON.stringify(turnServers));link.hash=params.toString();$('studentLink').value=link.href;try{const qr=qrcode(0,'M');qr.addData(link.href);qr.make();$('qr').innerHTML=qr.createSvgTag({scalable:true,margin:2});}catch{$('qr').textContent='Use the student link. Relay settings are too long for a QR code.';}show('tutor');clock();});
 peer.on('connection',receiveConnection);peer.on('error',e=>{clearTimeout(timer);if(role!=='tutor'){$('setupStatus').textContent='Could not open the room. The network may block PeerJS. Try another connection.';peer?.destroy();peer=null;$('startSession').disabled=false;}else $('tutorStatus').textContent='Connection service interrupted. Existing direct connections may still work. Keep this tab open.';});
 peer.on('disconnected',()=>{if(!closed){$('tutorStatus').textContent='Connection service disconnected. Trying to reconnect…';reconnectTimer=setTimeout(()=>{if(!closed&&peer?.disconnected)peer.reconnect();},1500);}});};
