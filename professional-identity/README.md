@@ -15,6 +15,21 @@ Implemented and uploaded to the edu repository. Automated application tests pass
 
 The GitHub-ready ZIP places these website files at its root, ready to upload. Its `README.md` and `session.test.cjs` are optional supporting files. For the test included in that ZIP, run `node session.test.cjs` from the extracted folder.
 
+## TURN relay trial
+
+The tutor setup now offers TURN relay mode. It forces `iceTransportPolicy: relay` on both tutor and student devices, so a successful submission tests the relay rather than silently using a direct connection. It requires valid temporary TURN credentials from a provider; no working account or credentials are bundled. The historical PeerJS public relay hostnames did not resolve during this change.
+
+1. Obtain short-lived, limited TURN credentials from your chosen provider, covering the 90 minute session. Request a `turns:` endpoint using TCP on port 443 for restricted networks. Do not put an account API key, permanent account secret or real relay credentials in this repository.
+2. In tutor setup, choose TURN relay mode and paste the provider’s ICE servers JSON array, or an object containing an `iceServers` array. Each TURN entry needs `urls`, `username` and `credential`.
+3. Select **Test relay on this device**. This checks whether that device can obtain a relay candidate. It does not test signalling or a complete student submission.
+4. Start the session and share the new student link. The link contains the temporary relay credentials in its fragment because each student browser must authenticate to the TURN server. Those credentials are visible to people with the link; choose limited credentials and keep the link within the group. Very long credentials may require sharing the link instead of a QR code.
+5. Student address bars remove the credentials after reading the link. The tutor’s configuration field clears after the room opens. End/delete clears the app’s references and joining link. Provider-side credential expiry is separate and must be set with the provider. The app cannot revoke provider credentials automatically.
+6. Test with two devices on the actual teaching network. Wait for the connected status, submit a drawing, verify receipt and inspect the tutor gallery. If signalling is blocked, TURN will not resolve it. Error messages now distinguish a missing tutor, signalling failure and a likely relay failure.
+
+No provider has been selected or institutionally approved by this change. Relay traffic is encrypted end to end by WebRTC; the provider still handles connection metadata, IP addresses and encrypted packets. Provider log retention and location must be checked. No artwork database or saved gallery is introduced.
+
+Automated tests cover relay settings validation, forced relay on both devices, a simulated relay reachability check, credential handoff, clearing the address fragment, submission and session clearing. An actual relay and university-network connection have not been verified because working credentials have not yet been supplied.
+
 ## Run the session
 
 1. Before teaching, test with the tutor device and at least one student device on the actual teaching network. Ideally test the full group size. Verify drawing, submission, enlargement, updates and deletion. Test expiry separately if needed by temporarily shortening the duration in a development copy.
@@ -30,9 +45,9 @@ The GitHub-ready ZIP places these website files at its root, ready to upload. It
 ## Privacy and its practical limits
 
 - No names, email addresses, student numbers, accounts, analytics or app cookies are requested. The app uses no localStorage, sessionStorage, IndexedDB, service worker, database, file upload or persistent artwork store.
-- Drawings and explanations exist in browser memory. Submissions travel directly over encrypted WebRTC data channels to the tutor. Other students are never sent the gallery. The website host does not receive artwork.
+- Drawings and explanations exist in browser memory. Submissions travel over encrypted WebRTC data channels to the tutor, directly in direct mode or through the selected TURN service in relay mode. Other students are never sent the gallery. The website host does not receive artwork.
 - PeerJS Cloud (`0.peerjs.com`) provides signalling. Google STUN (`stun.l.google.com:19302`) helps browsers find a direct path. Those services process connection information, including IP addresses and signalling metadata. Browser peers can learn each other’s network addresses. The website host processes routine connection information too. Provider log retention and location have not been verified. Do not describe this as “no personal data is processed” or as institutionally approved hosting.
-- Only a STUN server is configured. No TURN relay or third party artwork storage is configured. Some networks prevent a direct connection. There is no fallback through an artwork server. Try another permitted network if the teaching network blocks WebRTC; obtain local IT advice if necessary.
+- Direct mode configures STUN only. TURN trial mode uses the temporary relay configuration supplied by the tutor. No third party artwork store is configured. Some networks prevent a direct connection. The TURN relay forwards encrypted packets; it is not an artwork store. Try another permitted network if the teaching network blocks WebRTC; obtain local IT advice if necessary.
 - The random session identifier and joining token are in the link’s fragment. They are not sent to the website host as part of the page request. A session link is still a bearer invitation: anyone given it during the session can join, up to the 12 person limit. There is no student identity verification. Keep it within the room.
 - This is **application-level clearing of volatile state**, not a forensic erasure guarantee. There is no artwork database backup to delete. The app cannot erase screenshots, browser or operating system snapshots, a modified client, or copies someone deliberately makes.
 - At 90 minutes, running tabs clear the drawing, explanation and gallery. A suspended tab clears when its script next runs. “End and delete” instructs connected students to clear immediately. A disconnected student cannot receive that instruction; their expiry still applies when the page next runs. This is why students should close their tabs at the end as well.
